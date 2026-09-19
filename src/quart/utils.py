@@ -170,17 +170,34 @@ def restart() -> None:
     os.execv(executable, [executable] + args)
 
 
-async def cancel_tasks(tasks: set[asyncio.Task]) -> None:
-    # Cancel any pending, and wait for the cancellation to
-    # complete i.e. finish any remaining work.
+async def cancel_tasks(tasks: Iterable[asyncio.Task]) -> None:
+    # Cancel the tasks and wait for the cancellation to complete
+    # i.e. for any remaining work to finish. The gather ensures
+    # the CancelledError itself is waited for, but does not raise
+    # it. Any genuine exception raised by a task whilst it is
+    # being cancelled is stored on the task - use
+    # raise_task_exceptions to re-raise them.
+    tasks = list(tasks)
     for task in tasks:
         task.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True)
-    raise_task_exceptions(tasks)
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
-def raise_task_exceptions(tasks: set[asyncio.Task]) -> None:
-    # Raise any unexpected exceptions
+def raise_task_exceptions(tasks: Iterable[asyncio.Task]) -> None:
+    # Raise any unexpected exceptions from the tasks. Tasks that
+    # were simply cancelled are skipped, but a task that raised a
+    # genuine exception (including whilst being cancelled) is
+    # not. If multiple tasks raised, the exceptions are chained
+    # so that none are silently dropped.
+    exceptions = []
     for task in tasks:
-        if not task.cancelled() and task.exception() is not None:
-            raise task.exception()
+        if task.cancelled():
+            continue
+        exception = task.exception()
+        if exception is not None:
+            exceptions.append(exception)
+    for index in range(len(exceptions) - 1, 0, -1):
+        exceptions[index - 1].__context__ = exceptions[index]
+    if exceptions:
+        raise exceptions[0]

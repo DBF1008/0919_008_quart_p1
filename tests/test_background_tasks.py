@@ -72,3 +72,50 @@ async def test_sync_background_task() -> None:
         await test_client.get("/")
 
     assert data == "data"
+
+
+async def test_background_tasks_are_cleaned_up() -> None:
+    # Completed background tasks must be removed from
+    # app.background_tasks so that they are not retained.
+    app = Quart(__name__)
+
+    async def background() -> None:
+        await asyncio.sleep(0.2)
+
+    @app.route("/")
+    async def index() -> str:
+        app.add_background_task(background)
+        return ""
+
+    async with app.test_app():
+        test_client = app.test_client()
+        await test_client.get("/")
+        assert len(app.background_tasks) == 1
+        await asyncio.sleep(0.5)
+        assert app.background_tasks == set()
+
+    assert app.background_tasks == set()
+
+
+async def test_shutdown_waits_for_all_background_tasks() -> None:
+    # A failing background task must not prevent shutdown from
+    # waiting for the remaining tasks.
+    app = Quart(__name__)
+    results = []
+
+    async def failing() -> None:
+        raise ValueError("background error")
+
+    async def slow() -> None:
+        await asyncio.sleep(0.2)
+        results.append("slow")
+
+    @app.before_serving
+    async def startup() -> None:
+        app.add_background_task(failing)
+        app.add_background_task(slow)
+
+    async with app.test_app():
+        pass
+
+    assert results == ["slow"]

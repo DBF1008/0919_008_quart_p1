@@ -344,3 +344,99 @@ async def test__handle_exception(
             await _handle_exception(app, ValueError())
     else:
         await _handle_exception(app, ValueError())
+
+
+async def test_http_handler_exception_propagates(http_scope: HTTPScope) -> None:
+    # An exception raised by the handler must propagate out of the
+    # connection callable, even though the receiver task is
+    # cancelled as a result.
+    app = Quart(__name__)
+    app.testing = True
+
+    @app.route("/")
+    async def index() -> str:
+        raise ValueError("handler error")
+
+    connection = ASGIHTTPConnection(app, http_scope)
+    queue: asyncio.Queue = asyncio.Queue()
+    queue.put_nowait({"type": "http.request", "body": b"", "more_body": False})
+    queue.put_nowait({"type": "http.disconnect"})
+
+    async def receive() -> ASGIReceiveEvent:
+        return await queue.get()
+
+    async def send(message: ASGISendEvent) -> None:
+        pass
+
+    with pytest.raises(ValueError, match="handler error"):
+        await connection(receive, send)
+
+
+async def test_http_receiver_exception_propagates(http_scope: HTTPScope) -> None:
+    # An exception raised by the receiver must propagate, not be
+    # silently swallowed when the handler task is cancelled.
+    app = Quart(__name__)
+
+    @app.route("/")
+    async def index() -> str:
+        await asyncio.sleep(10)
+        return ""
+
+    connection = ASGIHTTPConnection(app, http_scope)
+
+    async def receive() -> ASGIReceiveEvent:
+        raise RuntimeError("receiver error")
+
+    async def send(message: ASGISendEvent) -> None:
+        pass
+
+    with pytest.raises(RuntimeError, match="receiver error"):
+        await asyncio.wait_for(connection(receive, send), timeout=1)
+
+
+async def test_websocket_handler_exception_propagates(
+    websocket_scope: WebsocketScope,
+) -> None:
+    # The websocket path must propagate handler exceptions the
+    # same way the http path does.
+    app = Quart(__name__)
+    app.testing = True
+
+    @app.websocket("/")
+    async def ws() -> None:
+        raise ValueError("websocket handler error")
+
+    connection = ASGIWebsocketConnection(app, websocket_scope)
+    queue: asyncio.Queue = asyncio.Queue()
+    queue.put_nowait({"type": "websocket.connect"})
+    queue.put_nowait({"type": "websocket.disconnect"})
+
+    async def receive() -> ASGIReceiveEvent:
+        return await queue.get()
+
+    async def send(message: ASGISendEvent) -> None:
+        pass
+
+    with pytest.raises(ValueError, match="websocket handler error"):
+        await connection(receive, send)
+
+
+async def test_websocket_receiver_exception_propagates(
+    websocket_scope: WebsocketScope,
+) -> None:
+    app = Quart(__name__)
+
+    @app.websocket("/")
+    async def ws() -> None:
+        await asyncio.sleep(10)
+
+    connection = ASGIWebsocketConnection(app, websocket_scope)
+
+    async def receive() -> ASGIReceiveEvent:
+        raise RuntimeError("receiver error")
+
+    async def send(message: ASGISendEvent) -> None:
+        pass
+
+    with pytest.raises(RuntimeError, match="receiver error"):
+        await asyncio.wait_for(connection(receive, send), timeout=1)

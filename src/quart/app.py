@@ -1783,7 +1783,7 @@ class Quart(App):
         self.shutdown_event.set()
         try:
             await asyncio.wait_for(
-                asyncio.gather(*self.background_tasks),
+                asyncio.gather(*self.background_tasks, return_exceptions=True),
                 timeout=self.config["BACKGROUND_TASK_SHUTDOWN_TIMEOUT"],
             )
         except asyncio.TimeoutError:
