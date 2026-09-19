@@ -2,6 +2,14 @@
 
 Unreleased
 
+- Fix ASGI connection task lifecycle so that exceptions raised by the
+  handler or receiver tasks are never silently dropped when the other
+  task is cancelled, for both HTTP and WebSocket connections.
+- Ensure ``raise_task_exceptions`` retrieves every task exception and
+  ``cancel_tasks`` is robust against the task set mutating during
+  cancellation.
+- Ensure completed background tasks are removed from
+  ``app.background_tasks`` so their references are released.
 - Flask backport: Fix signing key selection order when key rotation is enabled
   via ``SECRET_KEY_FALLBACKS``.
   <https://github.com/pallets/flask/security/advisories/GHSA-4grg-w6v8-c28g>

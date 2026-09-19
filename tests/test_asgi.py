@@ -344,3 +344,139 @@ async def test__handle_exception(
             await _handle_exception(app, ValueError())
     else:
         await _handle_exception(app, ValueError())
+
+
+def _http_scope() -> HTTPScope:
+    return {
+        "type": "http",
+        "asgi": {},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "https",
+        "path": "/",
+        "raw_path": b"/",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [(b"host", b"quart")],
+        "client": ("127.0.0.1", 80),
+        "server": None,
+        "extensions": {},
+        "state": {},  # type: ignore[typeddict-item]
+    }
+
+
+def _websocket_scope() -> WebsocketScope:
+    return {
+        "type": "websocket",
+        "asgi": {},
+        "http_version": "1.1",
+        "scheme": "wss",
+        "path": "/",
+        "raw_path": b"/",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [(b"host", b"quart")],
+        "client": ("127.0.0.1", 80),
+        "server": None,
+        "subprotocols": [],
+        "extensions": {},
+        "state": {},  # type: ignore[typeddict-item]
+    }
+
+
+async def _noop_send(message: ASGISendEvent) -> None:
+    pass
+
+
+async def _blocking_receive() -> ASGIReceiveEvent:
+    # Blocks forever, raising if cancelled
+    return await asyncio.Event().wait()  # type: ignore[return-value]
+
+
+async def _failing_cancellation_receive() -> ASGIReceiveEvent:
+    # Blocks forever, raising a genuine exception if cancelled
+    try:
+        return await asyncio.Event().wait()  # type: ignore[return-value]
+    except asyncio.CancelledError:
+        raise RuntimeError("receiver cleanup failed") from None
+
+
+async def _error_receive() -> ASGIReceiveEvent:
+    raise RuntimeError("receiver disconnected")
+
+
+async def test_http_handler_exception_propagates() -> None:
+    app = Quart(__name__)
+
+    @app.route("/")
+    async def index() -> str:
+        raise ValueError("handler failed")
+
+    connection = ASGIHTTPConnection(app, _http_scope())
+    with pytest.raises(ValueError, match="handler failed"):
+        await connection(_blocking_receive, _noop_send)
+
+
+async def test_http_handler_exception_not_lost_when_cancellation_fails() -> None:
+    # The handler's exception must propagate even if the receiver
+    # task raises a genuine exception whilst it is cancelled.
+    app = Quart(__name__)
+
+    @app.route("/")
+    async def index() -> str:
+        raise ValueError("handler failed")
+
+    connection = ASGIHTTPConnection(app, _http_scope())
+    with pytest.raises(ValueError, match="handler failed"):
+        await connection(_failing_cancellation_receive, _noop_send)
+
+
+async def test_http_receiver_exception_propagates() -> None:
+    app = Quart(__name__)
+
+    @app.route("/")
+    async def index() -> str:
+        return ""
+
+    connection = ASGIHTTPConnection(app, _http_scope())
+    with pytest.raises(RuntimeError, match="receiver disconnected"):
+        await connection(_error_receive, _noop_send)
+
+
+async def test_websocket_handler_exception_propagates() -> None:
+    app = Quart(__name__)
+
+    @app.websocket("/")
+    async def ws() -> None:
+        raise ValueError("handler failed")
+
+    connection = ASGIWebsocketConnection(app, _websocket_scope())
+    with pytest.raises(ValueError, match="handler failed"):
+        await connection(_blocking_receive, _noop_send)
+
+
+async def test_websocket_handler_exception_not_lost_when_cancellation_fails() -> None:
+    # The websocket path must handle exceptions consistently with
+    # the HTTP path - the handler's exception must propagate even if
+    # the receiver task raises a genuine exception whilst cancelled.
+    app = Quart(__name__)
+
+    @app.websocket("/")
+    async def ws() -> None:
+        raise ValueError("handler failed")
+
+    connection = ASGIWebsocketConnection(app, _websocket_scope())
+    with pytest.raises(ValueError, match="handler failed"):
+        await connection(_failing_cancellation_receive, _noop_send)
+
+
+async def test_websocket_receiver_exception_propagates() -> None:
+    app = Quart(__name__)
+
+    @app.websocket("/")
+    async def ws() -> None:
+        pass
+
+    connection = ASGIWebsocketConnection(app, _websocket_scope())
+    with pytest.raises(RuntimeError, match="receiver disconnected"):
+        await connection(_error_receive, _noop_send)

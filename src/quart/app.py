@@ -1379,6 +1379,9 @@ class Quart(App):
 
         task = asyncio.get_event_loop().create_task(_wrapper())
         self.background_tasks.add(task)
+        # Remove the task from the set once it completes, so that
+        # completed tasks are not retained (growing memory usage)
+        # whilst the app continues to run.
         task.add_done_callback(self.background_tasks.discard)
 
     async def handle_background_exception(self, error: Exception) -> None:
@@ -1788,6 +1791,12 @@ class Quart(App):
             )
         except asyncio.TimeoutError:
             await cancel_tasks(self.background_tasks)
+        finally:
+            # Release any completed tasks, ensuring the set does not
+            # retain references to finished tasks.
+            for task in list(self.background_tasks):
+                if task.done():
+                    self.background_tasks.discard(task)
 
         try:
             async with self.app_context():

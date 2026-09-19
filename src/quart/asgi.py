@@ -56,8 +56,13 @@ class ASGIHTTPConnection:
         done, pending = await asyncio.wait(
             [handler_task, receiver_task], return_when=asyncio.FIRST_COMPLETED
         )
-        await cancel_tasks(pending)
-        raise_task_exceptions(done)
+        try:
+            await cancel_tasks(pending)
+        finally:
+            # Ensure exceptions in the completed tasks are raised
+            # even if cancelling the pending tasks also raised,
+            # otherwise they would be silently dropped.
+            raise_task_exceptions(done)
 
     async def handle_messages(
         self, request: Request, receive: ASGIReceiveCallable
@@ -193,8 +198,14 @@ class ASGIWebsocketConnection:
         done, pending = await asyncio.wait(
             [handler_task, receiver_task], return_when=asyncio.FIRST_COMPLETED
         )
-        await cancel_tasks(pending)
-        raise_task_exceptions(done)
+        try:
+            await cancel_tasks(pending)
+        finally:
+            # Ensure exceptions in the completed tasks are raised
+            # even if cancelling the pending tasks also raised,
+            # otherwise they would be silently dropped. This matches
+            # the HTTP handling above.
+            raise_task_exceptions(done)
 
     async def handle_messages(self, receive: ASGIReceiveCallable) -> None:
         while True:

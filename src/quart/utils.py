@@ -172,7 +172,10 @@ def restart() -> None:
 
 async def cancel_tasks(tasks: set[asyncio.Task]) -> None:
     # Cancel any pending, and wait for the cancellation to
-    # complete i.e. finish any remaining work.
+    # complete i.e. finish any remaining work. A copy is taken as
+    # the set may be mutated (for example by done callbacks)
+    # whilst the cancellation completes.
+    tasks = set(tasks)
     for task in tasks:
         task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
@@ -180,7 +183,20 @@ async def cancel_tasks(tasks: set[asyncio.Task]) -> None:
 
 
 def raise_task_exceptions(tasks: set[asyncio.Task]) -> None:
-    # Raise any unexpected exceptions
+    # Raise any unexpected exceptions, ensuring none are silently
+    # dropped. Cancelled tasks are skipped (the cancellation was
+    # intended), however a genuine exception - including one raised
+    # by a task whilst it was being cancelled - must propagate.
+    exceptions = []
     for task in tasks:
-        if not task.cancelled() and task.exception() is not None:
-            raise task.exception()
+        if task.cancelled():
+            continue
+        exception = task.exception()
+        if exception is not None:
+            exceptions.append(exception)
+
+    if exceptions:
+        # Every exception has been retrieved above, so none will be
+        # lost to an "exception was never retrieved" warning. Raise
+        # the first so that it propagates to the caller.
+        raise exceptions[0]

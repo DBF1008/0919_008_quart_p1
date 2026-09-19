@@ -72,3 +72,31 @@ async def test_sync_background_task() -> None:
         await test_client.get("/")
 
     assert data == "data"
+
+
+async def test_background_task_removed_on_completion() -> None:
+    # Completed tasks must be removed from the background_tasks set
+    # so that their references are released.
+    app = Quart(__name__)
+
+    async def background() -> None:
+        await asyncio.sleep(0)
+
+    async with app.test_app():
+        app.add_background_task(background)
+        task = next(iter(app.background_tasks))
+        await task
+        await asyncio.sleep(0)  # Allow the done callback to run
+        assert app.background_tasks == set()
+
+
+async def test_background_tasks_empty_after_shutdown() -> None:
+    app = Quart(__name__)
+
+    async def background() -> None:
+        await asyncio.sleep(0)
+
+    async with app.test_app():
+        app.add_background_task(background)
+
+    assert app.background_tasks == set()
